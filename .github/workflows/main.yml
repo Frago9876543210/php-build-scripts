@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [ stable, master, php/8.0, pm4-php/8.0 ]
+  workflow_dispatch:
+
+jobs:
+  build-php:
+    name: Build PHP
+    runs-on: ${{ matrix.image }}
+
+    strategy:
+      matrix:
+        image: [ ubuntu-20.04, ubuntu-18.04 ]
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Fetching information about build machine
+        run: lscpu
+
+      - name: Installing apt packages
+        run: |
+          sudo apt update
+          # sudo apt upgrade -y
+          sudo apt install -y make autoconf automake libtool libtool-bin m4 wget gzip bzip2 bison g++ git cmake pkg-config re2c zip
+
+      - name: Compile PHP
+        run: |
+          WORKING_DIR=$(pwd)
+
+          PHP_VERSION=$(cat compile.sh | head -n2 | grep -Po "(\d+(?:\.)?){3}")
+          PHP_MAJOR_VERSION=$(cut -d '.' -f 1 <<< $PHP_VERSION)
+          PHP_MINOR_VERSION=$(cut -d '.' -f 2 <<< $PHP_VERSION)
+          PHP_BUILD_VERSION="$PHP_MAJOR_VERSION$PHP_MINOR_VERSION"
+
+          PHP_BUILD_DIR="/opt/php$PHP_BUILD_VERSION"
+
+          sudo mkdir -p $PHP_BUILD_DIR
+          sudo cp compile.sh $PHP_BUILD_DIR
+          cd $PHP_BUILD_DIR
+          sudo march=skylake mtune=generic ./compile.sh -t linux64 -n -g -j4 -f x86_64
+          sudo zip -r "php$PHP_BUILD_VERSION-${{ matrix.image }}-${GITHUB_REF##*/}.zip" bin/
+          sudo cp "php$PHP_BUILD_VERSION-${{ matrix.image }}-${GITHUB_REF##*/}.zip" $WORKING_DIR
+          cd $WORKING_DIR
+
+          gh auth login --with-token <<< $(echo ${{ secrets.PERSONAL_ACCESS_TOKEN }})
+          gh auth status
+
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          GITHUB_RELEASE_TAG="$PHP_VERSION@$COMMIT_SHA"
+          gh release create "$GITHUB_RELEASE_TAG" --title "PHP $PHP_VERSION" --notes-file NOTES.md || echo Release already created
+          gh release upload "$GITHUB_RELEASE_TAG" "php$PHP_BUILD_VERSION-${{ matrix.image }}-${GITHUB_REF##*/}.zip"
